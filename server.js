@@ -14,7 +14,7 @@ function isValidSession(session_id) {
   if (!session_id.startsWith("ARSLAN-MD~")) return false;
   const base64Part = session_id.replace("ARSLAN-MD~", "");
   try {
-    return Buffer.from(base64Part, 'base64').length > 70;
+    return Buffer.from(base64Part, 'base64').length > 10;
   } catch {
     return false;
   }

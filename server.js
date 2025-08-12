@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const axios = require('axios'); // For API calls
+const axios = require('axios');
 const path = require('path');
 const app = express();
 
@@ -18,38 +18,77 @@ const HEROKU_API = {
   }
 };
 
-// Validate Session ID
-function isValidSession(session_id) {
-  return session_id.startsWith("(ARSLAN-MD~)") || 
-         session_id.startsWith("ARSLAN-MD~");
+// 1. GitHub Fork Verification
+async function verifyFork(username) {
+  try {
+    const response = await axios.get(`https://api.github.com/repos/${username}/Arslan_MD`, {
+      headers: {
+        'User-Agent': 'ARSLAN-MD-Deployer',
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    });
+    
+    return response.data.fork && 
+           response.data.parent &&
+           response.data.parent.full_name === 'Arslan-MD/Arslan_MD';
+  } catch (error) {
+    console.error('Fork check failed:', error.response?.data?.message || error.message);
+    return false;
+  }
 }
 
-// Deploy Endpoint
+// 2. Session ID Validation
+function isValidSession(session_id) {
+  const prefixValid = session_id.startsWith("(ARSLAN-MD~)") || 
+                     session_id.startsWith("ARSLAN-MD~");
+  
+  if (!prefixValid) return false;
+
+  try {
+    const base64Part = session_id.replace(/^(\(ARSLAN-MD~\)|ARSLAN-MD~)/, '');
+    return Buffer.from(base64Part, 'base64').length > 10;
+  } catch {
+    return false;
+  }
+}
+
+// 3. Main Deploy Endpoint
 app.post('/deploy', async (req, res) => {
   const { github_username, session_id } = req.body;
 
-  try {
-    // 1. Validate Session
-    if (!isValidSession(session_id)) {
-      return res.status(400).json({ 
-        error: "Invalid SESSION_ID! Format: (ARSLAN-MD~)base64" 
-      });
-    }
+  // Step 1: Verify Fork
+  const isForked = await verifyFork(github_username);
+  if (!isForked) {
+    return res.status(400).json({
+      error: "Please fork the official ARSLAN-MD repo first!",
+      fork_url: "https://github.com/Arslan-MD/Arslan_MD/fork"
+    });
+  }
 
-    // 2. Create Heroku App
+  // Step 2: Validate Session
+  if (!isValidSession(session_id)) {
+    return res.status(400).json({
+      error: "Invalid SESSION_ID! Format: (ARSLAN-MD~)base64"
+    });
+  }
+
+  // Step 3: Deploy to Heroku
+  try {
     const APP_NAME = `arslan-botz-${Date.now()}`;
+    
+    // Create App
     await axios.post(`${HEROKU_API.baseURL}/apps`, {
       name: APP_NAME,
       region: 'eu'
     }, { headers: HEROKU_API.headers });
 
-    // 3. Set Config Vars
+    // Set Config
     await axios.patch(`${HEROKU_API.baseURL}/apps/${APP_NAME}/config-vars`, {
       SESSION_ID: session_id,
       GITHUB_USERNAME: github_username
     }, { headers: HEROKU_API.headers });
 
-    // 4. Trigger Build from GitHub
+    // Trigger Build
     await axios.post(`${HEROKU_API.baseURL}/apps/${APP_NAME}/builds`, {
       source_blob: {
         url: 'https://github.com/Arslan-MD/Arslan-Botz/tarball/main'
@@ -63,22 +102,22 @@ app.post('/deploy', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Deployment Error:', error.response?.data || error.message);
-    res.status(500).json({ 
+    console.error('Deploy Error:', error.response?.data || error.message);
+    res.status(500).json({
       error: "Deployment failed",
       details: error.response?.data || error.message
     });
   }
 });
 
-// Auto-Delete after 24 hours
+// 4. Auto-Cleanup (24h)
 setInterval(async () => {
   try {
     const { data: apps } = await axios.get(`${HEROKU_API.baseURL}/apps`, {
       headers: HEROKU_API.headers
     });
 
-    apps.forEach(async (app) => {
+    for (const app of apps) {
       if (app.name.startsWith('arslan-botz-')) {
         const created = new Date(app.created_at);
         const hours = (Date.now() - created) / (1000 * 60 * 60);
@@ -87,14 +126,14 @@ setInterval(async () => {
           await axios.delete(`${HEROKU_API.baseURL}/apps/${app.name}`, {
             headers: HEROKU_API.headers
           });
-          console.log(`✅ Deleted old app: ${app.name}`);
+          console.log(`♻️ Deleted old app: ${app.name}`);
         }
       }
-    });
-  } catch (e) {
-    console.error('❌ Cleanup error:', e.message);
+    }
+  } catch (error) {
+    console.error('Cleanup Error:', error.message);
   }
-}, 6 * 60 * 60 * 1000); // Runs every 6 hours
+}, 6 * 60 * 60 * 1000); // Run every 6 hours
 
 // Serve Frontend
 app.get('*', (req, res) => {
@@ -104,5 +143,14 @@ app.get('*', (req, res) => {
 // Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`
+  █████╗ ██████╗ ███████╗██╗      ███╗   ██╗
+  ██╔══██╗██╔══██╗██╔════╝██║      ████╗  ██║
+  ███████║██████╔╝█████╗  ██║█████╗██╔██╗ ██║
+  ██╔══██║██╔══██╗██╔══╝  ██║╚════╝██║╚██╗██║
+  ██║  ██║██║  ██║███████╗███████╗ ██║ ╚████║
+  ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═╝  ╚═══╝
+  
+  🚀 Server ready: http://localhost:${PORT}
+  `);
 });
